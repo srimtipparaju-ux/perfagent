@@ -1,0 +1,52 @@
+version: '3.9'
+
+services:
+  perfagent:
+    build: .
+    container_name: perfagent
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    volumes:
+      - uploads:/tmp/perf-agent/uploads
+      - logs:/tmp/perf-agent
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: perfagent-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    depends_on:
+      - perfagent
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: perfagent-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./observability/grafana-dashboard.json:/var/lib/grafana/dashboards/perfagent.json:ro
+    depends_on:
+      - prometheus
+
+volumes:
+  uploads:
+  logs:
+  prometheus-data:
+  grafana-data:
