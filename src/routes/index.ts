@@ -8,6 +8,7 @@ import { processInput, getReport, getAllReports } from '../agents/orchestrator';
 import { handleChat, getSession, clearSession } from '../chat/chat-agent';
 import { ingestDocument, getRagStats } from '../rag/retriever';
 import { getPrometheusMetrics, getRecentMetrics, getSummaryStats, register } from '../observability/llm-metrics';
+import { recordRun, listRuns, getRun, getRunStats } from '../data/run-store';
 import { logger } from '../utils/logger';
 
 const router = Router();
@@ -487,6 +488,44 @@ router.get('/metrics/recent', (req: Request, res: Response) => {
 // Aggregated stats for dashboard top cards
 router.get('/metrics/summary', (_req: Request, res: Response) => {
   res.json(getSummaryStats());
+});
+
+
+// ═════════════════════════════════════════════════════════════
+// RUN HISTORY — data engineering layer (append-only event log)
+// ═════════════════════════════════════════════════════════════
+
+// ── POST /runs ────────────────────────────────────────────────
+// Record a completed analysis run (called by orchestrator or clients).
+router.post('/runs', (req: Request, res: Response) => {
+  try {
+    const record = recordRun(req.body);
+    res.status(201).json(record);
+  } catch (err: any) {
+    logger.error('/runs POST error:', err);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── GET /runs ─────────────────────────────────────────────────
+router.get('/runs', (req: Request, res: Response) => {
+  const limit  = Math.min(200, Number(req.query.limit  || 50));
+  const offset = Number(req.query.offset || 0);
+  res.json(listRuns(limit, offset));
+});
+
+// ── GET /runs/stats ───────────────────────────────────────────
+// Aggregations for the dashboard: severity distribution, findings
+// by skill, runs/cost by day, totals.
+router.get('/runs/stats', (_req: Request, res: Response) => {
+  res.json(getRunStats());
+});
+
+// ── GET /runs/:id ─────────────────────────────────────────────
+router.get('/runs/:id', (req: Request, res: Response) => {
+  const run = getRun(req.params.id);
+  if (!run) return res.status(404).json({ error: 'run not found' });
+  res.json(run);
 });
 
 export default router;

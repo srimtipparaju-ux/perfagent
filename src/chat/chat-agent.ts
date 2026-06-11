@@ -124,7 +124,7 @@ export async function handleChat(
     const resp = await client.messages.create({
       model: MODEL,
       max_tokens: 2048,
-      system: systemPrompt,
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }] as any,
       messages: messages as any,
     });
 

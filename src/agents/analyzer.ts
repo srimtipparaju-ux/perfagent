@@ -11,6 +11,27 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-5';
 const MAX_CONTENT_CHARS = 15_000;
 const RAG_ENABLED = process.env.RAG_ENABLED !== 'false';   // on by default
+const MAX_RETRIES = Number(process.env.LLM_MAX_RETRIES || 3);
+
+// ── Retry with exponential backoff + jitter ──────────────────
+// Handles transient 429 / 529 / network errors from the Claude API.
+async function withRetry<T>(fn: () => Promise<T>, label: string): Promise<T> {
+  let lastErr: any;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      const status = err?.status || err?.response?.status;
+      const retryable = status === 429 || status === 529 || status >= 500 || err.code === 'ECONNRESET';
+      if (!retryable || attempt === MAX_RETRIES - 1) throw err;
+      const backoffMs = Math.min(8000, 500 * 2 ** attempt) + Math.random() * 250;
+      logger.warn(`${label} failed (status ${status}), retry ${attempt + 1}/${MAX_RETRIES} in ${Math.round(backoffMs)}ms`);
+      await new Promise(r => setTimeout(r, backoffMs));
+    }
+  }
+  throw lastErr;
+}
 
 // ─────────────────────────────────────────────────────────────
 // ANALYSIS AGENT
@@ -94,12 +115,14 @@ export async function runSkillAnalysis(
   let parsed: any = {};
 
   try {
-    const response = await client.messages.create({
+    // Prompt caching: skill system prompts are static per skill, so marking
+    // them as cacheable cuts input cost ~90% on cache hits (5-min TTL).
+    const response = await withRetry(() => client.messages.create({
       model: MODEL,
       max_tokens: 8192,
-      system: systemPrompt,
+      system: [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }] as any,
       messages: [{ role: 'user', content: userPrompt }],
-    });
+    }), `skill:${skill}`);
 
     rawText = response.content.find(b => b.type === 'text')?.text || '';
     inputTokens  = response.usage?.input_tokens || 0;
